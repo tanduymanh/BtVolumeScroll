@@ -1,14 +1,31 @@
 name: Build APK
 on:
   push:
-    branches: [main, master]
+    paths: ['*.zip']
   workflow_dispatch:
+    inputs:
+      zip:
+        description: 'Tên file zip (để trống = zip mới nhất)'
+        required: false
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: unzip -q src.zip -d proj
+        with:
+          fetch-depth: 2
+      - name: Chọn file zip
+        id: pick
+        run: |
+          Z="${{ github.event.inputs.zip }}"
+          if [ -z "$Z" ]; then
+            Z=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -E '^[^/]+\.zip$' | tail -1 || true)
+          fi
+          if [ -z "$Z" ]; then Z=$(ls -v *.zip | tail -1); fi
+          echo "Dùng file: $Z"
+          echo "zip=$Z" >> $GITHUB_OUTPUT
+          echo "name=${Z%.zip}" >> $GITHUB_OUTPUT
+      - run: unzip -q "${{ steps.pick.outputs.zip }}" -d proj
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -16,9 +33,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - run: gradle assembleDebug --no-daemon --stacktrace
-        working-directory: proj
+      - name: Build
+        run: |
+          D=$(dirname "$(find proj -maxdepth 3 -name 'settings.gradle*' | head -1)")
+          cd "$D"
+          if [ -f gradlew ]; then chmod +x gradlew; ./gradlew assembleDebug --no-daemon; else gradle assembleDebug --no-daemon; fi
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          find . -path '*outputs/apk*' -name '*.apk' -exec cp {} "$GITHUB_WORKSPACE/out/" \;
       - uses: actions/upload-artifact@v4
         with:
-          name: BtVolumeScroll-apk
-          path: proj/app/build/outputs/apk/debug/app-debug.apk
+          name: ${{ steps.pick.outputs.name }}-apk
+          path: out/*.apk
